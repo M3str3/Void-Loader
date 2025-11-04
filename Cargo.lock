@@ -1018,7 +1018,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "spliter"
+name = "splitter"
 version = "0.1.0"
 dependencies = [
  "anyhow",

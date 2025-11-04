@@ -1,6 +1,6 @@
 [workspace]
-members = ["crates/spliter","crates/mainlib", "crates/mountercli", "crates/mounterlib", "crates/demo"]
-default-members = ["crates/spliter","crates/mainlib", "crates/mountercli"]
+members = ["crates/splitter","crates/mainlib", "crates/mountercli", "crates/mounterlib", "crates/demo"]
+default-members = ["crates/splitter","crates/mainlib", "crates/mountercli"]
 
 resolver="2"
 
