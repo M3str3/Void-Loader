@@ -1,0 +1,10 @@
+[workspace]
+members = ["crates/spliter","crates/mainlib", "crates/mountercli", "crates/mounterlib", "crates/demo"]
+default-members = ["crates/spliter","crates/mainlib", "crates/mountercli"]
+
+resolver="2"
+
+[workspace.package]
+edition = "2021"
+license = "GPL-3.0"
+authors = ["M3str3 <namestre3@protonmail.com>"]
