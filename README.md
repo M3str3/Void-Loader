@@ -8,6 +8,10 @@ VoidLoader is a proof-of-concept implementation inspired by the "Fractionated Ca
 
 The toolkit splits PE executables into multiple fragments, distributes them across different locations, and reconstructs them entirely in memory for execution—without touching the disk.
 
+<img width="954" height="430" alt="image" src="https://github.com/user-attachments/assets/b93f6778-960d-4865-b9a4-6ddf8a120e4c" />
+<img width="954" height="430" alt="image" src="https://github.com/user-attachments/assets/6bb03f9c-6021-4028-90cf-5c69062b6f83" />
+
+
 ## Components
 
 - **MainLib**: Shared core functionality with ChaCha20 encryption
