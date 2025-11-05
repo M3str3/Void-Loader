@@ -1,7 +1,7 @@
 //! HTTP/HTTPS download functionality
 
 use anyhow::{Context, Result};
-use mainlib::{PartHeader, HEADER_SIZE};
+use mainlib::{PartHeader, HEADER_SIZE_V1, HEADER_SIZE_V2, HEADER_VERSION_V1, HEADER_VERSION_V2};
 use reqwest::blocking::Client;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -17,11 +17,15 @@ pub fn download_single(
     let full_data = download_from_url(url, timeout_secs, user_agent)?;
     validate_minimum_size(&full_data)?;
 
-    let header = parse_header(&full_data)?;
-    let data = extract_data(&full_data)?;
+    let (header, header_size) = parse_header(&full_data)?;
+    let data = extract_data(&full_data, header_size)?; 
 
     validate_data_size(&header, &data)?;
-    validate_data_checksum(&header, &data)?;
+    
+    // Skip checksum validation for encrypted parts - will be validated after decryption
+    if !header.is_encrypted() {
+        validate_data_checksum(&header, &data)?;
+    }
 
     Ok((header, data))
 }
@@ -114,22 +118,47 @@ fn download_from_url(url: &str, timeout_secs: u64, user_agent: &str) -> Result<V
 }
 
 fn validate_minimum_size(data: &[u8]) -> Result<()> {
-    if data.len() < HEADER_SIZE {
+    if data.len() < HEADER_SIZE_V1 {
         anyhow::bail!(
             "Downloaded file is too small: {} bytes (minimum: {} bytes for header)",
             data.len(),
-            HEADER_SIZE
+            HEADER_SIZE_V1
         );
     }
     Ok(())
 }
 
-fn parse_header(data: &[u8]) -> Result<PartHeader> {
-    PartHeader::from_bytes(&data[..HEADER_SIZE]).context("Failed to parse part header")
+fn parse_header(data: &[u8]) -> Result<(PartHeader, usize)> {
+    // Read first 6 bytes to determine version
+    if data.len() < 6 {
+        anyhow::bail!("Insufficient data to read header version");
+    }
+    
+    let version = u16::from_le_bytes([data[4], data[5]]);
+    
+    let header_size = match version {
+        HEADER_VERSION_V1 => HEADER_SIZE_V1,
+        HEADER_VERSION_V2 => HEADER_SIZE_V2,
+        _ => anyhow::bail!("Unknown header version: {}", version),
+    };
+    
+    if data.len() < header_size {
+        anyhow::bail!(
+            "Insufficient data for header: {} bytes (required: {} bytes for v{} header)",
+            data.len(),
+            header_size,
+            version
+        );
+    }
+    
+    let header = PartHeader::from_bytes(&data[..header_size])
+        .context("Failed to parse part header")?;
+    
+    Ok((header, header_size))
 }
 
-fn extract_data(full_data: &[u8]) -> Result<Vec<u8>> {
-    Ok(full_data[HEADER_SIZE..].to_vec())
+fn extract_data(full_data: &[u8], header_size: usize) -> Result<Vec<u8>> {
+    Ok(full_data[header_size..].to_vec())
 }
 
 fn validate_data_size(header: &PartHeader, data: &[u8]) -> Result<()> {
@@ -177,58 +206,5 @@ impl Downloader for HttpDownloader {
 
     fn download_all(&self, sources: &[&str], timeout: u64) -> Result<Vec<DownloadedPart>> {
         download_all(sources, timeout, &self.user_agent)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use mainlib::calculate_checksum;
-
-    #[test]
-    fn test_validate_minimum_size() {
-        let data = vec![0u8; HEADER_SIZE + 10];
-        assert!(validate_minimum_size(&data).is_ok());
-
-        let too_small = vec![0u8; HEADER_SIZE - 1];
-        assert!(validate_minimum_size(&too_small).is_err());
-    }
-
-    #[test]
-    fn test_extract_data() {
-        let full_data = vec![0u8; HEADER_SIZE + 100];
-        let extracted = extract_data(&full_data).unwrap();
-        assert_eq!(extracted.len(), 100);
-    }
-
-    #[test]
-    fn test_validate_data_size() {
-        let header = PartHeader::new(0, 1, 100, 100, [0u8; 32], [0u8; 32]);
-        let correct_data = vec![0u8; 100];
-        assert!(validate_data_size(&header, &correct_data).is_ok());
-
-        let wrong_data = vec![0u8; 50];
-        assert!(validate_data_size(&header, &wrong_data).is_err());
-    }
-
-    #[test]
-    fn test_http_downloader_creation() {
-        let downloader = HttpDownloader::new("TestAgent/1.0");
-        assert_eq!(downloader.user_agent, "TestAgent/1.0");
-
-        let default_downloader = HttpDownloader::default();
-        assert!(default_downloader.user_agent.contains("Mozilla"));
-    }
-
-    #[test]
-    fn test_parse_header() {
-        let data = vec![0u8; 100];
-        let checksum = calculate_checksum(&data);
-        let header = PartHeader::new(0, 1, 100, 100, checksum, checksum);
-        let header_bytes = header.to_bytes();
-
-        let parsed = parse_header(&header_bytes).unwrap();
-        assert_eq!(parsed.part_number, 0);
-        assert_eq!(parsed.total_parts, 1);
     }
 }

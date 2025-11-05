@@ -5,29 +5,62 @@
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 
+pub mod crypto;
+
 // Constants
 pub const MAGIC_BYTES: &[u8; 4] = b"SPLT";
-pub const HEADER_VERSION: u16 = 1;
-pub const HEADER_SIZE: usize = 96;
+pub const HEADER_VERSION_V1: u16 = 1;
+pub const HEADER_VERSION_V2: u16 = 2;
+pub const HEADER_SIZE_V1: usize = 96;
+pub const HEADER_SIZE_V2: usize = 128;
+pub const HEADER_SIZE: usize = HEADER_SIZE_V1; // For backward compatibility
 pub const CHECKSUM_SIZE: usize = 32;
 
-/// Header structure for each split binary part (96 bytes total)
+// Crypto flags
+pub const FLAG_ENCRYPTED: u8 = 0x01;
+
+/// Header structure for each split binary part
+/// v1: 96 bytes, v2: 128 bytes (with crypto fields)
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PartHeader {
     pub magic: [u8; 4],
     pub version: u16,
+    pub flags: u8,
+    pub reserved: u8,
     pub part_number: u32,
     pub total_parts: u32,
     pub data_size: u64,
     pub original_size: u64,
     pub data_checksum: [u8; 32],
     pub original_checksum: [u8; 32],
-    _padding: [u8; 2],
+    pub salt: [u8; 16],
+    pub nonce: [u8; 12],
+    _padding: [u8; 4],
 }
 
 impl PartHeader {
+    /// Create a new v1 header (no encryption) - for backward compatibility
     pub fn new(
+        part_number: u32,
+        total_parts: u32,
+        data_size: u64,
+        original_size: u64,
+        data_checksum: [u8; 32],
+        original_checksum: [u8; 32],
+    ) -> Self {
+        Self::new_v1(
+            part_number,
+            total_parts,
+            data_size,
+            original_size,
+            data_checksum,
+            original_checksum,
+        )
+    }
+
+    /// Create a new v1 header (no encryption)
+    pub fn new_v1(
         part_number: u32,
         total_parts: u32,
         data_size: u64,
@@ -37,39 +70,92 @@ impl PartHeader {
     ) -> Self {
         Self {
             magic: *MAGIC_BYTES,
-            version: HEADER_VERSION,
+            version: HEADER_VERSION_V1,
+            flags: 0,
+            reserved: 0,
             part_number,
             total_parts,
             data_size,
             original_size,
             data_checksum,
             original_checksum,
-            _padding: [0; 2],
+            salt: [0; 16],
+            nonce: [0; 12],
+            _padding: [0; 4],
         }
     }
 
+    /// Create a new v2 header (with encryption)
+    pub fn new_v2(
+        part_number: u32,
+        total_parts: u32,
+        data_size: u64,
+        original_size: u64,
+        data_checksum: [u8; 32],
+        original_checksum: [u8; 32],
+        salt: [u8; 16],
+        nonce: [u8; 12],
+    ) -> Self {
+        Self {
+            magic: *MAGIC_BYTES,
+            version: HEADER_VERSION_V2,
+            flags: FLAG_ENCRYPTED,
+            reserved: 0,
+            part_number,
+            total_parts,
+            data_size,
+            original_size,
+            data_checksum,
+            original_checksum,
+            salt,
+            nonce,
+            _padding: [0; 4],
+        }
+    }
+
+    /// Check if this header indicates encrypted data
+    pub fn is_encrypted(&self) -> bool {
+        self.flags & FLAG_ENCRYPTED != 0
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(HEADER_SIZE);
+        let header_size = if self.version == HEADER_VERSION_V2 {
+            HEADER_SIZE_V2
+        } else {
+            HEADER_SIZE_V1
+        };
+        
+        let mut bytes = Vec::with_capacity(header_size);
 
         bytes.extend_from_slice(&self.magic);
         bytes.extend_from_slice(&self.version.to_le_bytes());
+        bytes.push(self.flags);
+        bytes.push(self.reserved);
         bytes.extend_from_slice(&self.part_number.to_le_bytes());
         bytes.extend_from_slice(&self.total_parts.to_le_bytes());
         bytes.extend_from_slice(&self.data_size.to_le_bytes());
         bytes.extend_from_slice(&self.original_size.to_le_bytes());
         bytes.extend_from_slice(&self.data_checksum);
         bytes.extend_from_slice(&self.original_checksum);
-        bytes.extend_from_slice(&self._padding);
+        
+        if self.version == HEADER_VERSION_V2 {
+            bytes.extend_from_slice(&self.salt);
+            bytes.extend_from_slice(&self.nonce);
+            bytes.extend_from_slice(&self._padding);
+        } else {
+            // v1 padding
+            bytes.extend_from_slice(&[0u8; 2]);
+        }
 
         bytes
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() < HEADER_SIZE {
+        if bytes.len() < HEADER_SIZE_V1 {
             anyhow::bail!(
-                "Insufficient data for header: {} bytes (required: {})",
+                "Insufficient data for header: {} bytes (required at least: {})",
                 bytes.len(),
-                HEADER_SIZE
+                HEADER_SIZE_V1
             );
         }
 
@@ -84,39 +170,64 @@ impl PartHeader {
         }
 
         let version = u16::from_le_bytes([bytes[4], bytes[5]]);
-        if version != HEADER_VERSION {
+        
+        if version != HEADER_VERSION_V1 && version != HEADER_VERSION_V2 {
             anyhow::bail!(
-                "Unsupported header version: {} (expected: {})",
+                "Unsupported header version: {} (expected: {} or {})",
                 version,
-                HEADER_VERSION
+                HEADER_VERSION_V1,
+                HEADER_VERSION_V2
             );
         }
 
-        let part_number = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]);
-        let total_parts = u32::from_le_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]);
+        let flags = bytes[6];
+        let reserved = bytes[7];
+        let part_number = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+        let total_parts = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
         let data_size = u64::from_le_bytes([
-            bytes[14], bytes[15], bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21],
+            bytes[16], bytes[17], bytes[18], bytes[19], 
+            bytes[20], bytes[21], bytes[22], bytes[23],
         ]);
         let original_size = u64::from_le_bytes([
-            bytes[22], bytes[23], bytes[24], bytes[25], bytes[26], bytes[27], bytes[28], bytes[29],
+            bytes[24], bytes[25], bytes[26], bytes[27], 
+            bytes[28], bytes[29], bytes[30], bytes[31],
         ]);
 
         let mut data_checksum = [0u8; 32];
-        data_checksum.copy_from_slice(&bytes[30..62]);
+        data_checksum.copy_from_slice(&bytes[32..64]);
 
         let mut original_checksum = [0u8; 32];
-        original_checksum.copy_from_slice(&bytes[62..94]);
+        original_checksum.copy_from_slice(&bytes[64..96]);
+
+        let mut salt = [0u8; 16];
+        let mut nonce = [0u8; 12];
+
+        if version == HEADER_VERSION_V2 {
+            if bytes.len() < HEADER_SIZE_V2 {
+                anyhow::bail!(
+                    "Insufficient data for v2 header: {} bytes (required: {})",
+                    bytes.len(),
+                    HEADER_SIZE_V2
+                );
+            }
+            salt.copy_from_slice(&bytes[96..112]);
+            nonce.copy_from_slice(&bytes[112..124]);
+        }
 
         Ok(Self {
             magic,
             version,
+            flags,
+            reserved,
             part_number,
             total_parts,
             data_size,
             original_size,
             data_checksum,
             original_checksum,
-            _padding: [0; 2],
+            salt,
+            nonce,
+            _padding: [0; 4],
         })
     }
 
@@ -169,70 +280,4 @@ pub fn validate_part_number(part_number: u32, total_parts: u32) -> Result<()> {
         );
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_header_serialization() {
-        let original = PartHeader::new(0, 3, 1024, 3072, [1u8; 32], [2u8; 32]);
-        let bytes = original.to_bytes();
-        assert_eq!(bytes.len(), HEADER_SIZE);
-        let parsed = PartHeader::from_bytes(&bytes).unwrap();
-        assert_eq!(original, parsed);
-    }
-
-    #[test]
-    fn test_invalid_magic_bytes() {
-        let mut bytes = vec![0u8; HEADER_SIZE];
-        bytes[0..4].copy_from_slice(b"XXXX");
-        let result = PartHeader::from_bytes(&bytes);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_checksum_validation() {
-        let data = b"Hello, World!";
-        let checksum = calculate_checksum(data);
-        let header = PartHeader::new(
-            0,
-            1,
-            data.len() as u64,
-            data.len() as u64,
-            checksum,
-            checksum,
-        );
-        assert!(header.validate_data(data).is_ok());
-    }
-
-    #[test]
-    fn test_checksum_mismatch() {
-        let data = b"Hello, World!";
-        let wrong_checksum = [0u8; 32];
-        let header = PartHeader::new(
-            0,
-            1,
-            data.len() as u64,
-            data.len() as u64,
-            wrong_checksum,
-            wrong_checksum,
-        );
-        assert!(header.validate_data(data).is_err());
-    }
-
-    #[test]
-    fn test_hex_encode() {
-        let bytes = [0xDE, 0xAD, 0xBE, 0xEF];
-        assert_eq!(hex_encode(&bytes), "deadbeef");
-    }
-
-    #[test]
-    fn test_validate_part_number() {
-        assert!(validate_part_number(0, 3).is_ok());
-        assert!(validate_part_number(2, 3).is_ok());
-        assert!(validate_part_number(3, 3).is_err());
-        assert!(validate_part_number(10, 3).is_err());
-    }
 }

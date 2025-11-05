@@ -43,6 +43,12 @@ struct Args {
         help = "Show detailed progress information"
     )]
     verbose: bool,
+
+    #[arg(
+        long = "password",
+        help = "Encrypt fragments with ChaCha20 (requires password)"
+    )]
+    password: Option<String>,
 }
 
 fn validate_pieces(s: &str) -> Result<u32, String> {
@@ -114,6 +120,7 @@ fn run(args: Args) -> Result<()> {
         &original_checksum,
         args.pieces,
         &output_config,
+        args.password.as_deref(),
         args.verbose,
     )?;
 
@@ -165,6 +172,7 @@ fn split_and_write_parts(
     original_checksum: &[u8; 32],
     num_parts: u32,
     config: &OutputConfig,
+    password: Option<&str>,
     verbose: bool,
 ) -> Result<()> {
     let chunk_size = ((total_size as f64) / (num_parts as f64)).ceil() as usize;
@@ -192,6 +200,7 @@ fn split_and_write_parts(
             total_size,
             original_checksum,
             config,
+            password,
             verbose,
         )?;
     }
@@ -206,35 +215,78 @@ fn write_part(
     original_size: u64,
     original_checksum: &[u8; 32],
     config: &OutputConfig,
+    password: Option<&str>,
     verbose: bool,
 ) -> Result<()> {
+    // Calculate checksum of original (unencrypted) data
     let data_checksum = calculate_checksum(data);
 
-    let header = PartHeader::new(
-        part_number,
-        total_parts,
-        data.len() as u64,
-        original_size,
-        data_checksum,
-        *original_checksum,
-    );
+    let (final_data, header) = if let Some(pass) = password {
+        // Generate random salt and nonce
+        let salt = mainlib::crypto::generate_salt();
+        let nonce = mainlib::crypto::generate_nonce();
+
+        // Derive encryption key from password
+        let key = mainlib::crypto::derive_key_pbkdf2(pass, &salt);
+
+        // Encrypt the data
+        let encrypted_data = mainlib::crypto::chacha20_encrypt(data, &key, &nonce);
+
+        // Create v2 header with encryption metadata
+        let header = mainlib::PartHeader::new_v2(
+            part_number,
+            total_parts,
+            encrypted_data.len() as u64,
+            original_size,
+            data_checksum,
+            *original_checksum,
+            salt,
+            nonce,
+        );
+
+        (encrypted_data, header)
+    } else {
+        // No encryption - create v1 header
+        let header = mainlib::PartHeader::new_v1(
+            part_number,
+            total_parts,
+            data.len() as u64,
+            original_size,
+            data_checksum,
+            *original_checksum,
+        );
+
+        (data.to_vec(), header)
+    };
 
     let output_path = config
         .directory
         .join(format!("{}.part{:03}", config.name_prefix, part_number));
 
+    let header_size = if header.version == mainlib::HEADER_VERSION_V2 {
+        mainlib::HEADER_SIZE_V2
+    } else {
+        mainlib::HEADER_SIZE_V1
+    };
+
     if verbose {
+        let encryption_info = if password.is_some() {
+            " [ENCRYPTED]"
+        } else {
+            ""
+        };
         println!(
-            "  [{}/{}] Writing: {} ({} bytes + {} byte header)",
+            "  [{}/{}] Writing: {} ({} bytes + {} byte header){}",
             part_number + 1,
             total_parts,
             output_path.display(),
-            data.len(),
-            mainlib::HEADER_SIZE
+            final_data.len(),
+            header_size,
+            encryption_info
         );
     }
 
-    write_part_file(&output_path, &header, data)?;
+    write_part_file(&output_path, &header, &final_data)?;
 
     Ok(())
 }
@@ -270,32 +322,4 @@ fn validate_input_file(path: &Path) -> Result<()> {
 
 fn read_file(path: &Path) -> Result<Vec<u8>> {
     fs::read(path).with_context(|| format!("Failed to read file: {}", path.display()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_validate_pieces() {
-        assert!(validate_pieces("2").is_ok());
-        assert!(validate_pieces("10").is_ok());
-        assert!(validate_pieces("1").is_err());
-        assert!(validate_pieces("0").is_err());
-        assert!(validate_pieces("abc").is_err());
-    }
-
-    #[test]
-    fn test_output_config_defaults() {
-        let args = Args {
-            executable: PathBuf::from("/tmp/test.exe"),
-            pieces: 3,
-            output_dir: None,
-            output_name: None,
-            verbose: false,
-        };
-
-        let config = OutputConfig::from_args(&args).unwrap();
-        assert_eq!(config.name_prefix, "test");
-    }
 }

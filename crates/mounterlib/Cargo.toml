@@ -24,12 +24,16 @@ windows = { version = "0.52", features = [
     "Win32_System_SystemInformation",
 ] }
 
+[dev-dependencies]
+tempfile = "3.8"
+
 [features]
-default = ["download-http", "execution-local-pe"]
+default = ["download-http", "download-local", "execution-local-pe"]
 
 # Download methods
 download-http = ["reqwest"]
 download-dns = []
+download-local = []
 
 # Execution methods
 execution-local-pe = []

@@ -16,7 +16,7 @@ struct Args {
         long = "urls",
         value_delimiter = ',',
         required = true,
-        help = "URLs of split parts to download"
+        help = "URLs or local file paths of split parts (auto-detects HTTP/local)"
     )]
     urls: Vec<String>,
 
@@ -65,6 +65,12 @@ struct Args {
         help = "Target process path (required for process-hollowing method)"
     )]
     target_process: Option<String>,
+
+    #[arg(
+        long = "password",
+        help = "Password for encrypted fragments"
+    )]
+    password: Option<String>,
 }
 
 fn main() {
@@ -86,15 +92,27 @@ fn run(args: Args) -> Result<()> {
         anyhow::bail!("At least one URL must be provided");
     }
 
+    let is_local = args.urls.iter().all(|url| {
+        !url.starts_with("http://") && !url.starts_with("https://")
+    });
+
     if args.verbose {
         println!("[*] Mounter v0.1.0");
-        println!("[*] Downloading {} parts...", args.urls.len());
+        if is_local {
+            println!("[*] Loading {} parts from local files...", args.urls.len());
+        } else {
+            println!("[*] Downloading {} parts...", args.urls.len());
+        }
     }
 
     let parts = download_all_parts(&args)?;
 
     if args.verbose {
-        println!("[+] Downloaded {} parts successfully", parts.len());
+        if is_local {
+            println!("[+] Loaded {} parts successfully", parts.len());
+        } else {
+            println!("[+] Downloaded {} parts successfully", parts.len());
+        }
     }
 
     if args.verbose {
@@ -102,8 +120,13 @@ fn run(args: Args) -> Result<()> {
     }
 
     let validate_checksums = !args.no_validate;
-    let binary = reconstruct::rebuild_from_parts(parts, validate_checksums, args.verbose)
-        .context("Failed to reconstruct binary")?;
+    let binary = reconstruct::rebuild_from_parts(
+        parts,
+        args.password.as_deref(),
+        validate_checksums,
+        args.verbose,
+    )
+    .context("Failed to reconstruct binary")?;
 
     if args.verbose {
         println!(
@@ -164,6 +187,34 @@ fn run(args: Args) -> Result<()> {
 fn download_all_parts(
     args: &Args,
 ) -> Result<std::collections::HashMap<u32, (mainlib::PartHeader, Vec<u8>)>> {
-    download::http::download_all_as_map(&args.urls, args.timeout, &args.user_agent, args.verbose)
-        .context("Failed to download parts")
+    // Detect if URLs are local file paths or HTTP(S) URLs
+    let is_local = args.urls.iter().all(|url| {
+        !url.starts_with("http://") && !url.starts_with("https://")
+    });
+
+    if is_local {
+        // Load from local filesystem
+        #[cfg(feature = "download-local")]
+        {
+            use std::path::PathBuf;
+            let paths: Vec<PathBuf> = args.urls.iter().map(|s| PathBuf::from(s)).collect();
+            download::local::load_all_as_map(&paths, args.verbose)
+                .context("Failed to load parts from local files")
+        }
+        #[cfg(not(feature = "download-local"))]
+        {
+            anyhow::bail!("Local file loading not available. Compile with --features download-local")
+        }
+    } else {
+        // Download from HTTP(S)
+        #[cfg(feature = "download-http")]
+        {
+            download::http::download_all_as_map(&args.urls, args.timeout, &args.user_agent, args.verbose)
+                .context("Failed to download parts")
+        }
+        #[cfg(not(feature = "download-http"))]
+        {
+            anyhow::bail!("HTTP download not available. Compile with --features download-http")
+        }
+    }
 }

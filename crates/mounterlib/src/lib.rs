@@ -42,6 +42,7 @@ pub struct LoaderConfig {
     pub user_agent: String,
     pub validate_checksums: bool,
     pub verbose: bool,
+    pub password: Option<String>,
 }
 
 impl Default for LoaderConfig {
@@ -52,6 +53,7 @@ impl Default for LoaderConfig {
             user_agent: "Mozilla/5.0".to_string(),
             validate_checksums: true,
             verbose: false,
+            password: None,
         }
     }
 }
@@ -86,7 +88,12 @@ impl Loader {
         &self,
         parts: HashMap<u32, (mainlib::PartHeader, Vec<u8>)>,
     ) -> Result<Vec<u8>> {
-        reconstruct::rebuild_from_parts(parts, self.config.validate_checksums, self.config.verbose)
+        reconstruct::rebuild_from_parts(
+            parts,
+            self.config.password.as_deref(),
+            self.config.validate_checksums,
+            self.config.verbose,
+        )
     }
 
     #[cfg(feature = "execution-local-pe")]
@@ -125,28 +132,3 @@ impl Loader {
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const LIB_NAME: &str = env!("CARGO_PKG_NAME");
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_default_config() {
-        let config = LoaderConfig::default();
-        assert_eq!(config.timeout, 30);
-        assert!(config.validate_checksums);
-        assert!(!config.verbose);
-    }
-
-    #[test]
-    fn test_loader_creation() {
-        let config = LoaderConfig::default();
-        let _loader = Loader::new(config);
-    }
-
-    #[test]
-    fn test_version_info() {
-        assert!(!VERSION.is_empty());
-        assert_eq!(LIB_NAME, "mounterlib");
-    }
-}

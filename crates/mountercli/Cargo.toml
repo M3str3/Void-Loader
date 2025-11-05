@@ -16,10 +16,11 @@ clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
 
 [features]
-default = ["download-http", "execution-local-pe"]
+default = ["download-http", "download-local", "execution-local-pe", "execution-process-hollowing"]
 
 # Download methods
 download-http = ["mounterlib/download-http"]
+download-local = ["mounterlib/download-local"]
 
 # Execution methods
 execution-local-pe = ["mounterlib/execution-local-pe"]
