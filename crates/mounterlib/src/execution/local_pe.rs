@@ -1,5 +1,4 @@
-use anyhow::Result;
-use crate::debug_println;
+use anyhow::{Context, Result};
 use std::ffi::c_void;
 use std::mem;
 use std::ptr;
@@ -61,14 +60,14 @@ impl BaseRelocationEntry {
 /// Execute PE binary in memory (Local PE Injection)
 pub fn inject_and_execute(pe_data: &[u8], args: &[String], verbose: bool) -> Result<()> {
     if verbose {
-        debug_println!("Starting Local PE Injection...");
+        println!("Starting Local PE Injection...");
     }
 
     validate_pe(pe_data, verbose)?;
     let is_64bit = is_pe64(pe_data)?;
 
     if verbose {
-        debug_println!(
+        println!(
             "Architecture: {}",
             if is_64bit { "64-bit" } else { "32-bit" }
         );
@@ -86,50 +85,50 @@ fn execute_pe32(pe_data: &[u8], _args: &[String], verbose: bool) -> Result<()> {
     let is_dll = unsafe { (*nt_header).FileHeader.Characteristics.0 & IMAGE_FILE_DLL.0 != 0 };
 
     if verbose {
-        debug_println!("Type: {}", if is_dll { "DLL" } else { "EXE" });
+        println!("Type: {}", if is_dll { "DLL" } else { "EXE" });
         unsafe {
-            debug_println!("Image size: 0x{:X}", (*nt_header).OptionalHeader.SizeOfImage);
-            debug_println!("Entry point: 0x{:X}", (*nt_header).OptionalHeader.AddressOfEntryPoint);
+            println!("Image size: 0x{:X}", (*nt_header).OptionalHeader.SizeOfImage);
+            println!("Entry point: 0x{:X}", (*nt_header).OptionalHeader.AddressOfEntryPoint);
         }
     }
 
     if verbose {
-        debug_println!("Allocating memory...");
+        println!("Allocating memory...");
     }
     let image_base = allocate_image_memory32(nt_header, verbose)?;
 
     if verbose {
-        debug_println!("Copying headers...");
+        println!("Copying headers...");
     }
     copy_headers32(pe_data, image_base, nt_header)?;
 
     if verbose {
-        debug_println!("Copying sections...");
+        println!("Copying sections...");
     }
     copy_sections32(pe_data, image_base, nt_header, verbose)?;
 
     if verbose {
-        debug_println!("Resolving imports...");
+        println!("Resolving imports...");
     }
     fix_imports32(image_base, nt_header, verbose)?;
 
     if verbose {
-        debug_println!("Applying relocations...");
+        println!("Applying relocations...");
     }
     fix_relocations32(image_base, nt_header, verbose)?;
 
     if verbose {
-        debug_println!("Fixing memory protections...");
+        println!("Fixing memory protections...");
     }
-    fix_memory_protections32(image_base, nt_header, verbose)?;
+    fix_memory_protections32(image_base, nt_header)?;
 
     if verbose {
-        debug_println!("Executing TLS callbacks...");
+        println!("Executing TLS callbacks...");
     }
     execute_tls_callbacks32(image_base, nt_header, verbose)?;
 
     if verbose {
-        debug_println!("Executing entry point...");
+        println!("Executing entry point...");
     }
     execute_entrypoint32(image_base, nt_header, is_dll)?;
 
@@ -141,51 +140,51 @@ fn execute_pe64(pe_data: &[u8], _args: &[String], verbose: bool) -> Result<()> {
     let is_dll = unsafe { (*nt_header).FileHeader.Characteristics.0 & IMAGE_FILE_DLL.0 != 0 };
 
     if verbose {
-        debug_println!("Type: {}", if is_dll { "DLL" } else { "EXE" });
+        println!("Type: {}", if is_dll { "DLL" } else { "EXE" });
     }
 
     if verbose {
-        debug_println!("Allocating memory...");
+        println!("Allocating memory...");
     }
     let image_base = allocate_image_memory64(nt_header, verbose)?;
 
     if verbose {
-        debug_println!("Copying headers...");
+        println!("Copying headers...");
     }
     copy_headers64(pe_data, image_base, nt_header, verbose)?;
 
     if verbose {
-        debug_println!("Copying sections...");
+        println!("Copying sections...");
     }
     copy_sections64(pe_data, image_base, nt_header, verbose)?;
 
     if verbose {
-        debug_println!("Resolving imports...");
+        println!("Resolving imports...");
     }
     fix_imports64(image_base, nt_header, verbose)?;
 
     if verbose {
-        debug_println!("Applying relocations...");
+        println!("Applying relocations...");
     }
     fix_relocations64(image_base, nt_header, verbose)?;
 
     if verbose {
-        debug_println!("Fixing memory protections...");
+        println!("Fixing memory protections...");
     }
     fix_memory_protections64(image_base, nt_header, verbose)?;
 
     if verbose {
-        debug_println!("Executing TLS callbacks...");
+        println!("Executing TLS callbacks...");
     }
     execute_tls_callbacks64(image_base, nt_header, verbose)?;
 
     if verbose {
-        debug_println!("Executing entry point...");
+        println!("Executing entry point...");
     }
     execute_entrypoint64(image_base, nt_header, is_dll, verbose)?;
 
     if verbose {
-        debug_println!("Execution completed");
+        println!("Execution completed");
     }
 
     Ok(())
@@ -224,7 +223,7 @@ fn validate_pe(pe_data: &[u8], verbose: bool) -> Result<()> {
     }
 
     if verbose {
-        debug_println!("Valid PE");
+        println!("Valid PE");
     }
 
     Ok(())
@@ -248,7 +247,7 @@ fn allocate_image_memory32(
         let preferred_base = (*nt_header).OptionalHeader.ImageBase as usize;
 
         if verbose {
-            debug_println!("  Preferred base: 0x{:X}", preferred_base);
+            println!("  Preferred base: 0x{:X}", preferred_base);
         }
 
         // Try to allocate at preferred base first (important for PEs without relocations)
@@ -261,7 +260,7 @@ fn allocate_image_memory32(
 
         if address.is_null() {
             if verbose {
-                debug_println!(
+                println!(
                     "  Could not allocate at preferred base, trying alternate address..."
                 );
             }
@@ -274,9 +273,9 @@ fn allocate_image_memory32(
         }
 
         if verbose {
-            debug_println!("  Memory allocated at: {:p}", address);
+            println!("  Memory allocated at: {:p}", address);
             if address as usize == preferred_base {
-                debug_println!("  Loaded at preferred base - no relocations needed");
+                println!("  Loaded at preferred base - no relocations needed");
             }
         }
 
@@ -318,7 +317,7 @@ fn copy_sections32(
 
             if verbose {
                 let name = String::from_utf8_lossy(&section.Name);
-                debug_println!(
+                println!(
                     "  Section {}: {} (VA: 0x{:X}, Size: 0x{:X})",
                     i,
                     name.trim_end_matches('\0'),
@@ -358,7 +357,7 @@ fn fix_imports32(
 
         if import_dir.Size == 0 || import_dir.VirtualAddress == 0 {
             if verbose {
-                debug_println!("  (No imports)");
+                println!("  (No imports)");
             }
             return Ok(());
         }
@@ -372,7 +371,7 @@ fn fix_imports32(
             let dll_name_str = std::ffi::CStr::from_ptr(dll_name);
 
             if verbose {
-                debug_println!("  Loading: {:?}", dll_name_str);
+                println!("  Loading: {:?}", dll_name_str);
             }
 
             let h_module = match LoadLibraryA(PCSTR(dll_name as *const u8)) {
@@ -440,14 +439,14 @@ fn fix_imports32(
                         if let Some(addr) = stub_addr {
                             (*thunk).u1.Function = addr;
                             if verbose {
-                                debug_println!(
+                                println!(
                                     "  Using stub for import: {} from {:?}",
                                     func_name, dll_name_str
                                 );
                             }
                         } else {
                             if verbose {
-                                debug_println!(
+                                println!(
                                     "  Could not resolve import: {} from {:?}",
                                     func_name, dll_name_str
                                 );
@@ -482,17 +481,17 @@ fn fix_relocations32(
         if verbose {
             let e_lfanew_val = (*dos_header_in_memory).e_lfanew;
             let image_base_val = (*nt_header_in_memory).OptionalHeader.ImageBase;
-            debug_println!("  Debug: Image base in memory: {:p}", image_base);
-            debug_println!("  Debug: e_lfanew: 0x{:X}", e_lfanew_val);
-            debug_println!("  Debug: NT headers at: {:p}", nt_header_in_memory);
-            debug_println!("  Debug: ImageBase from header: 0x{:X}", image_base_val);
+            println!("  Debug: Image base in memory: {:p}", image_base);
+            println!("  Debug: e_lfanew: 0x{:X}", e_lfanew_val);
+            println!("  Debug: NT headers at: {:p}", nt_header_in_memory);
+            println!("  Debug: ImageBase from header: 0x{:X}", image_base_val);
         }
 
         let reloc_dir = (*nt_header_in_memory).OptionalHeader.DataDirectory
             [IMAGE_DIRECTORY_ENTRY_BASERELOC.0 as usize];
 
         if verbose {
-            debug_println!(
+            println!(
                 "  Debug: Reloc dir VA: 0x{:X}, Size: 0x{:X}",
                 reloc_dir.VirtualAddress, reloc_dir.Size
             );
@@ -500,7 +499,7 @@ fn fix_relocations32(
 
         if reloc_dir.Size == 0 || reloc_dir.VirtualAddress == 0 {
             if verbose {
-                debug_println!("  (No relocations in PE)");
+                println!("  (No relocations in PE)");
             }
             return Ok(());
         }
@@ -509,14 +508,14 @@ fn fix_relocations32(
 
         if delta == 0 {
             if verbose {
-                debug_println!("  Loaded at preferred base, no relocations needed");
+                println!("  Loaded at preferred base, no relocations needed");
             }
             return Ok(());
         }
 
         if verbose {
-            debug_println!("  Delta: 0x{:X}", delta);
-            debug_println!("  Relocation entries: {} bytes", reloc_dir.Size);
+            println!("  Delta: 0x{:X}", delta);
+            println!("  Relocation entries: {} bytes", reloc_dir.Size);
         }
 
         let mut base_relocation =
@@ -558,7 +557,7 @@ fn fix_relocations32(
                     IMAGE_REL_BASED_ABSOLUTE => {}
                     _ => {
                         if verbose {
-                            debug_println!("  Unknown relocation type: {}", reloc_type);
+                            println!("  Unknown relocation type: {}", reloc_type);
                         }
                     }
                 }
@@ -575,8 +574,7 @@ fn fix_relocations32(
 
 fn fix_memory_protections32(
     image_base: *mut c_void,
-    _nt_header: *mut IMAGE_NT_HEADERS32,
-    verbose: bool,
+    _nt_header: *mut IMAGE_NT_HEADERS32
 ) -> Result<()> {
     unsafe {
         // Get headers from the allocated memory
@@ -613,9 +611,8 @@ fn fix_memory_protections32(
 
             if size > 0 {
                 let mut old_protect = PAGE_PROTECTION_FLAGS(0);
-                if VirtualProtect(address, size, protection, &mut old_protect).is_err() && verbose {
-                    debug_println!("  Failed to change section protection");
-                }
+                VirtualProtect(address, size, protection, &mut old_protect)
+                    .context("Failed to change section protection")?;
             }
 
             section_header = section_header.add(1);
@@ -647,7 +644,7 @@ fn allocate_image_memory64(
         let preferred_base = (*nt_header).OptionalHeader.ImageBase as usize;
 
         if verbose {
-            debug_println!("  Preferred base: 0x{:X}", preferred_base);
+            println!("  Preferred base: 0x{:X}", preferred_base);
         }
 
         // Try to allocate at preferred base first (important for PEs without relocations)
@@ -660,7 +657,7 @@ fn allocate_image_memory64(
 
         if address.is_null() {
             if verbose {
-                debug_println!(
+                println!(
                     "  Could not allocate at preferred base, trying alternate address..."
                 );
             }
@@ -673,9 +670,9 @@ fn allocate_image_memory64(
         }
 
         if verbose {
-            debug_println!("  Memory allocated at: {:p}", address);
+            println!("  Memory allocated at: {:p}", address);
             if address as usize == preferred_base {
-                debug_println!("  Loaded at preferred base - no relocations needed");
+                println!("  Loaded at preferred base - no relocations needed");
             }
         }
 
@@ -709,11 +706,18 @@ fn copy_sections64(
 
         for i in 0..num_sections {
             let section = section_header.add(i as usize);
-            let section_name = std::ffi::CStr::from_ptr((*section).Name.as_ptr() as *const i8);
+            let section_name = {
+                // Section names are 8 bytes, may not be null-terminated
+                let name_bytes = &(*section).Name;
+                let name_str = std::str::from_utf8(name_bytes)
+                    .unwrap_or("")
+                    .trim_end_matches('\0');
+                name_str
+            };
 
             if verbose {
-                debug_println!(
-                    "  Copying section: {:?} (size: {}, RVA: 0x{:X})",
+                println!(
+                    "  Copying section: {} (size: {}, RVA: 0x{:X})",
                     section_name,
                     (*section).SizeOfRawData,
                     (*section).VirtualAddress
@@ -748,7 +752,7 @@ fn fix_imports64(
 
         if import_dir.Size == 0 || import_dir.VirtualAddress == 0 {
             if verbose {
-                debug_println!("  (No imports)");
+                println!("  (No imports)");
             }
             return Ok(());
         }
@@ -762,7 +766,7 @@ fn fix_imports64(
             let dll_name_str = std::ffi::CStr::from_ptr(dll_name);
 
             if verbose {
-                debug_println!("  Loading: {:?}", dll_name_str);
+                println!("  Loading: {:?}", dll_name_str);
             }
 
             let h_module = match LoadLibraryA(PCSTR(dll_name as *const u8)) {
@@ -830,14 +834,14 @@ fn fix_imports64(
                         if let Some(addr) = stub_addr {
                             (*thunk).u1.Function = addr;
                             if verbose {
-                                debug_println!(
+                                println!(
                                     "  Using stub for import: {} from {:?}",
                                     func_name, dll_name_str
                                 );
                             }
                         } else {
                             if verbose {
-                                debug_println!(
+                                println!(
                                     "  Could not resolve import: {} from {:?}",
                                     func_name, dll_name_str
                                 );
@@ -869,7 +873,7 @@ fn fix_relocations64(
 
         if reloc_dir.Size == 0 || reloc_dir.VirtualAddress == 0 {
             if verbose {
-                debug_println!("  (No relocations - must be at preferred base)");
+                println!("  (No relocations - must be at preferred base)");
             }
             return Ok(());
         }
@@ -880,7 +884,7 @@ fn fix_relocations64(
 
         if delta == 0 {
             if verbose {
-                debug_println!("  Loaded at preferred base - no relocations needed");
+                println!("  Loaded at preferred base - no relocations needed");
             }
             return Ok(());
         }
@@ -958,7 +962,7 @@ fn fix_memory_protections64(
         let num_sections = (*nt_header).FileHeader.NumberOfSections;
 
         if verbose {
-            debug_println!(
+            println!(
                 "  Fixing protections for {} sections...",
                 num_sections
             );
@@ -989,9 +993,8 @@ fn fix_memory_protections64(
 
             if size > 0 {
                 let mut old_protect = PAGE_PROTECTION_FLAGS(0);
-                if VirtualProtect(address, size, protection, &mut old_protect).is_err() && verbose {
-                    debug_println!("  Failed to change section protection");
-                }
+                VirtualProtect(address, size, protection, &mut old_protect)
+                    .with_context(|| format!("Failed to change protection for section {}", i))?;
             }
         }
     }
@@ -1010,7 +1013,7 @@ fn execute_tls_callbacks64(
 
         if tls_dir.Size == 0 || tls_dir.VirtualAddress == 0 {
             if verbose {
-                debug_println!("  (No TLS callbacks)");
+                println!("  (No TLS callbacks)");
             }
             return Ok(());
         }
@@ -1024,7 +1027,7 @@ fn execute_tls_callbacks64(
             let mut i = 0;
             while let Some(callback) = *callbacks_address.add(i) {
                 if verbose {
-                    debug_println!("  Executing TLS callback #{}", i);
+                    println!("  Executing TLS callback #{}", i);
                 }
                 callback(image_base, DLL_PROCESS_ATTACH, ptr::null_mut());
                 i += 1;
@@ -1076,7 +1079,7 @@ fn execute_tls_callbacks32(
         }
 
         if verbose {
-            debug_println!("  Executing TLS callbacks...");
+            println!("  Executing TLS callbacks...");
         }
 
         let tls_directory =

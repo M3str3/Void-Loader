@@ -25,14 +25,14 @@ pub fn rebuild_from_parts(
     validate_all_parts_present(&parts, &metadata)?;
 
     if verbose {
-        debug_println!("  ✓ All parts present and validated");
+        println!("  ✓ All parts present and validated");
     }
 
     // Decrypt parts if needed
     let decrypted_parts = decrypt_parts_if_needed(parts, password, verbose)?;
 
     if verbose {
-        debug_println!("  Assembling binary...");
+        println!("  Assembling binary...");
     }
 
     let reconstructed = assemble_parts(&decrypted_parts, &metadata, verbose)?;
@@ -41,13 +41,13 @@ pub fn rebuild_from_parts(
 
     if validate_checksums {
         if verbose {
-            debug_println!("  Verifying final checksum...");
+            println!("  Verifying final checksum...");
         }
 
         validate_final_checksum(&reconstructed, &metadata)?;
 
         if verbose {
-            debug_println!("  ✓ Checksum verified correctly");
+            println!("  ✓ Checksum verified correctly");
         }
     }
 
@@ -107,7 +107,7 @@ fn decrypt_parts_if_needed(
             })?;
 
             if verbose {
-                debug_println!("  Decrypting part {}...", part_num);
+                println!("  Decrypting part {}...", part_num);
             }
 
             // Derive key from password and salt from header
@@ -245,7 +245,7 @@ fn assemble_parts(
             .ok_or_else(|| anyhow::anyhow!("Part {} missing during assembly", i))?;
 
         if verbose {
-            debug_println!("    Part {}: {} bytes", i, data.len());
+            println!("    Part {}: {} bytes", i, data.len());
         }
 
         reconstructed.extend_from_slice(data);
@@ -256,13 +256,13 @@ fn assemble_parts(
 
 #[cfg(debug_assertions)]
 fn print_metadata_summary(metadata: &ReconstructionMetadata) {
-    debug_println!("  Total parts expected: {}", metadata.total_parts);
-    debug_println!(
+    println!("  Total parts expected: {}", metadata.total_parts);
+    println!(
         "  Original size: {} bytes ({:.2} MB)",
         metadata.original_size,
         metadata.original_size as f64 / 1_048_576.0
     );
-    debug_println!(
+    println!(
         "  Original checksum: {}",
         hex_encode(&metadata.original_checksum)
     );

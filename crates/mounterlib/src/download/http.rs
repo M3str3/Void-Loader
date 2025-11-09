@@ -59,14 +59,14 @@ pub fn download_all_as_map(
 
     for (idx, url) in urls.iter().enumerate() {
         if verbose {
-            debug_println!("  [{}/{}] Downloading: {}", idx + 1, urls.len(), url);
+            println!("  [{}/{}] Downloading: {}", idx + 1, urls.len(), url);
         }
 
         let (header, data) = download_single(url, timeout_secs, user_agent)
             .with_context(|| format!("Failed to download part {} from URL: {}", idx, url))?;
 
         if verbose {
-            debug_println!(
+            println!(
                 "    ✓ Part {} of {} ({} bytes)",
                 header.part_number + 1,
                 header.total_parts,
@@ -101,10 +101,11 @@ fn download_from_url(url: &str, timeout_secs: u64, user_agent: &str) -> Result<V
 
     let status = response.status();
     if !status.is_success() {
+        let reason = status.canonical_reason().unwrap_or("Unknown");
         anyhow::bail!(
             "HTTP request failed: {} {} (URL: {})",
             status.as_u16(),
-            status.canonical_reason().unwrap_or("Unknown"),
+            reason,
             url
         );
     }
