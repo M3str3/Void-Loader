@@ -5,7 +5,7 @@ use std::ptr;
 use windows::core::PCSTR;
 use windows::Win32::Foundation::{BOOL, HINSTANCE};
 use windows::Win32::System::Diagnostics::Debug::{
-    IMAGE_DIRECTORY_ENTRY_BASERELOC, IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_DIRECTORY_ENTRY_TLS,
+    IMAGE_DIRECTORY_ENTRY_BASERELOC, IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR, IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_DIRECTORY_ENTRY_TLS,
     IMAGE_FILE_DLL, IMAGE_NT_HEADERS32, IMAGE_NT_HEADERS64, IMAGE_SECTION_HEADER,
 };
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
@@ -17,13 +17,15 @@ use windows::Win32::System::SystemServices::{
     DLL_PROCESS_ATTACH, IMAGE_BASE_RELOCATION, IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE,
     IMAGE_IMPORT_BY_NAME, IMAGE_IMPORT_DESCRIPTOR, IMAGE_NT_SIGNATURE, IMAGE_ORDINAL_FLAG32,
     IMAGE_ORDINAL_FLAG64, IMAGE_REL_BASED_ABSOLUTE, IMAGE_REL_BASED_DIR64, IMAGE_REL_BASED_HIGH,
-    IMAGE_REL_BASED_HIGHLOW, IMAGE_REL_BASED_LOW, IMAGE_TLS_DIRECTORY64, PIMAGE_TLS_CALLBACK,
+    IMAGE_REL_BASED_HIGHLOW, IMAGE_REL_BASED_LOW, IMAGE_TLS_DIRECTORY32, IMAGE_TLS_DIRECTORY64,
+    PIMAGE_TLS_CALLBACK,
 };
 use windows::Win32::System::WindowsProgramming::{IMAGE_THUNK_DATA32, IMAGE_THUNK_DATA64};
 
 // Function pointer types
 type ExeEntryPoint = unsafe extern "system" fn() -> BOOL;
 type DllEntryPoint = unsafe extern "system" fn(HINSTANCE, u32, *mut c_void) -> BOOL;
+type CorExeMain = unsafe extern "system" fn() -> i32;
 
 // CRT Import Stubs - Global variables
 static mut STUB_ENVIRON: *mut *mut i8 = ptr::null_mut();
@@ -130,7 +132,7 @@ fn execute_pe32(pe_data: &[u8], _args: &[String], verbose: bool) -> Result<()> {
     if verbose {
         println!("Executing entry point...");
     }
-    execute_entrypoint32(image_base, nt_header, is_dll)?;
+    execute_entrypoint32(image_base, nt_header, is_dll, verbose)?;
 
     Ok(())
 }
@@ -1042,23 +1044,53 @@ fn execute_entrypoint64(
     image_base: *mut c_void,
     nt_header: *mut IMAGE_NT_HEADERS64,
     is_dll: bool,
-    _verbose: bool,
+    verbose: bool,
 ) -> Result<()> {
     unsafe {
-        let entry_point = (image_base as usize
-            + (*nt_header).OptionalHeader.AddressOfEntryPoint as usize)
-            as *const c_void;
-
-        if is_dll {
-            let dll_main: DllEntryPoint = mem::transmute(entry_point);
-            dll_main(
-                HINSTANCE(image_base as isize),
-                DLL_PROCESS_ATTACH,
-                ptr::null_mut(),
-            );
+        // Check if this is a .NET assembly
+        let com_descriptor_dir = (*nt_header).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR.0 as usize];
+        
+        if com_descriptor_dir.Size > 0 && com_descriptor_dir.VirtualAddress != 0 {
+            // This is a .NET assembly, use _CorExeMain or _CorDllMain
+            if verbose {
+                println!("  Detected .NET assembly, loading CLR...");
+            }
+            
+            let mscoree = LoadLibraryA(windows::core::s!("mscoree.dll"))
+                .context("Failed to load mscoree.dll for .NET execution")?;
+            
+            let cor_entry_name = if is_dll {
+                windows::core::s!("_CorDllMain")
+            } else {
+                windows::core::s!("_CorExeMain")
+            };
+            
+            let cor_entry = GetProcAddress(mscoree, cor_entry_name)
+                .context("Failed to get _CorExeMain/_CorDllMain from mscoree.dll")?;
+            
+            if verbose {
+                println!("  Calling {} at: {:p}", if is_dll { "_CorDllMain" } else { "_CorExeMain" }, cor_entry as *const c_void);
+            }
+            
+            let cor_main: CorExeMain = mem::transmute(cor_entry);
+            cor_main();
         } else {
-            let exe_main: ExeEntryPoint = mem::transmute(entry_point);
-            exe_main();
+            // Native binary
+            let entry_point = (image_base as usize
+                + (*nt_header).OptionalHeader.AddressOfEntryPoint as usize)
+                as *const c_void;
+
+            if is_dll {
+                let dll_main: DllEntryPoint = mem::transmute(entry_point);
+                dll_main(
+                    HINSTANCE(image_base as isize),
+                    DLL_PROCESS_ATTACH,
+                    ptr::null_mut(),
+                );
+            } else {
+                let exe_main: ExeEntryPoint = mem::transmute(entry_point);
+                exe_main();
+            }
         }
     }
 
@@ -1075,6 +1107,9 @@ fn execute_tls_callbacks32(
             (*nt_header).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS.0 as usize];
 
         if tls_dir.Size == 0 || tls_dir.VirtualAddress == 0 {
+            if verbose {
+                println!("  (No TLS callbacks)");
+            }
             return Ok(());
         }
 
@@ -1083,13 +1118,19 @@ fn execute_tls_callbacks32(
         }
 
         let tls_directory =
-            (image_base as usize + tls_dir.VirtualAddress as usize) as *const IMAGE_TLS_DIRECTORY64;
-        let callback_array = (*tls_directory).AddressOfCallBacks as *const PIMAGE_TLS_CALLBACK;
+            (image_base as usize + tls_dir.VirtualAddress as usize) as *const IMAGE_TLS_DIRECTORY32;
+        let callbacks_address =
+            (*tls_directory).AddressOfCallBacks as usize as *const PIMAGE_TLS_CALLBACK;
 
-        let mut i = 0;
-        while let Some(callback) = *callback_array.offset(i) {
-            callback(image_base, DLL_PROCESS_ATTACH, ptr::null_mut());
-            i += 1;
+        if !callbacks_address.is_null() {
+            let mut i = 0;
+            while let Some(callback) = *callbacks_address.add(i) {
+                if verbose {
+                    println!("  Executing TLS callback #{}", i);
+                }
+                callback(image_base, DLL_PROCESS_ATTACH, ptr::null_mut());
+                i += 1;
+            }
         }
     }
 
@@ -1100,23 +1141,53 @@ fn execute_entrypoint32(
     image_base: *mut c_void,
     nt_header: *mut IMAGE_NT_HEADERS32,
     is_dll: bool,
+    verbose: bool,
 ) -> Result<()> {
-    // SAFETY: The entry point is a valid function pointer.
     unsafe {
-        let entry_point = (image_base as usize
-            + (*nt_header).OptionalHeader.AddressOfEntryPoint as usize)
-            as *const c_void;
-
-        if is_dll {
-            let dll_main: DllEntryPoint = mem::transmute(entry_point);
-            dll_main(
-                HINSTANCE(image_base as isize),
-                DLL_PROCESS_ATTACH,
-                ptr::null_mut(),
-            );
+        // Check if this is a .NET assembly
+        let com_descriptor_dir = (*nt_header).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR.0 as usize];
+        
+        if com_descriptor_dir.Size > 0 && com_descriptor_dir.VirtualAddress != 0 {
+            // This is a .NET assembly, use _CorExeMain or _CorDllMain
+            if verbose {
+                println!("  Detected .NET assembly, loading CLR...");
+            }
+            
+            let mscoree = LoadLibraryA(windows::core::s!("mscoree.dll"))
+                .context("Failed to load mscoree.dll for .NET execution")?;
+            
+            let cor_entry_name = if is_dll {
+                windows::core::s!("_CorDllMain")
+            } else {
+                windows::core::s!("_CorExeMain")
+            };
+            
+            let cor_entry = GetProcAddress(mscoree, cor_entry_name)
+                .context("Failed to get _CorExeMain/_CorDllMain from mscoree.dll")?;
+            
+            if verbose {
+                println!("  Calling {} at: {:p}", if is_dll { "_CorDllMain" } else { "_CorExeMain" }, cor_entry as *const c_void);
+            }
+            
+            let cor_main: CorExeMain = mem::transmute(cor_entry);
+            cor_main();
         } else {
-            let exe_main: ExeEntryPoint = mem::transmute(entry_point);
-            exe_main();
+            // Native binary
+            let entry_point = (image_base as usize
+                + (*nt_header).OptionalHeader.AddressOfEntryPoint as usize)
+                as *const c_void;
+
+            if is_dll {
+                let dll_main: DllEntryPoint = mem::transmute(entry_point);
+                dll_main(
+                    HINSTANCE(image_base as isize),
+                    DLL_PROCESS_ATTACH,
+                    ptr::null_mut(),
+                );
+            } else {
+                let exe_main: ExeEntryPoint = mem::transmute(entry_point);
+                exe_main();
+            }
         }
     }
 
