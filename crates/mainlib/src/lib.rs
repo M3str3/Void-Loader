@@ -142,9 +142,6 @@ impl PartHeader {
             bytes.extend_from_slice(&self.salt);
             bytes.extend_from_slice(&self.nonce);
             bytes.extend_from_slice(&self._padding);
-        } else {
-            // v1 padding
-            bytes.extend_from_slice(&[0u8; 2]);
         }
 
         bytes

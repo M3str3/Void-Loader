@@ -1,8 +1,11 @@
-use std::thread;
-use std::time::Duration;
-
 fn main() {
-    println!("Hello World!");
-    thread::sleep(Duration::from_secs(2));
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    
+    if args.is_empty() {
+        println!("Hello, World!");
+    } else {
+        for name in args {
+            println!("Hello, {}!", name);
+        }
+    }
 }
-

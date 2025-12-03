@@ -59,6 +59,150 @@ impl BaseRelocationEntry {
     }
 }
 
+static mut CUSTOM_CMDLINE_A: Vec<u8> = Vec::new();
+static mut CUSTOM_CMDLINE_W: Vec<u16> = Vec::new();
+
+#[no_mangle]
+unsafe extern "system" fn hooked_get_command_line_a() -> *const i8 {
+    if !CUSTOM_CMDLINE_A.is_empty() {
+        CUSTOM_CMDLINE_A.as_ptr() as *const i8
+    } else {
+        ptr::null()
+    }
+}
+
+#[no_mangle]
+unsafe extern "system" fn hooked_get_command_line_w() -> *const u16 {
+    if !CUSTOM_CMDLINE_W.is_empty() {
+        CUSTOM_CMDLINE_W.as_ptr()
+    } else {
+        ptr::null()
+    }
+}
+
+struct CommandLineBackup {
+    had_cmdline: bool,
+}
+
+unsafe fn set_command_line_hook(image_base: *mut c_void, nt_header32: Option<*mut IMAGE_NT_HEADERS32>, nt_header64: Option<*mut IMAGE_NT_HEADERS64>, args: &[String]) -> Option<CommandLineBackup> {
+    let mut new_cmdline = String::from("program.exe");
+    
+    for arg in args.iter() {
+        new_cmdline.push(' ');
+        if arg.contains(' ') {
+            new_cmdline.push('"');
+            new_cmdline.push_str(arg);
+            new_cmdline.push('"');
+        } else {
+            new_cmdline.push_str(arg);
+        }
+    }
+
+    CUSTOM_CMDLINE_A = new_cmdline.as_bytes().to_vec();
+    CUSTOM_CMDLINE_A.push(0);
+
+    let mut cmdline_w: Vec<u16> = new_cmdline.encode_utf16().collect();
+    cmdline_w.push(0);
+    CUSTOM_CMDLINE_W = cmdline_w;
+
+    if let Some(nt_header) = nt_header32 {
+        hook_command_line_in_iat32(image_base, nt_header);
+    } else if let Some(nt_header) = nt_header64 {
+        hook_command_line_in_iat64(image_base, nt_header);
+    }
+
+    Some(CommandLineBackup { had_cmdline: true })
+}
+
+unsafe fn hook_command_line_in_iat32(image_base: *mut c_void, nt_header: *mut IMAGE_NT_HEADERS32) {
+    let import_dir = (*nt_header).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT.0 as usize];
+    if import_dir.Size == 0 {
+        return;
+    }
+
+    let mut import_desc = (image_base as usize + import_dir.VirtualAddress as usize) as *mut IMAGE_IMPORT_DESCRIPTOR;
+
+    while (*import_desc).Name != 0 {
+        let mut thunk = (image_base as usize + (*import_desc).FirstThunk as usize) as *mut IMAGE_THUNK_DATA32;
+        let mut name_thunk = if (*import_desc).Anonymous.OriginalFirstThunk != 0 {
+            (image_base as usize + (*import_desc).Anonymous.OriginalFirstThunk as usize) as *mut IMAGE_THUNK_DATA32
+        } else {
+            thunk
+        };
+
+        while (*name_thunk).u1.Function != 0 {
+            if (*name_thunk).u1.Ordinal & IMAGE_ORDINAL_FLAG32 == 0 {
+                let import_by_name = (image_base as usize + (*name_thunk).u1.AddressOfData as usize) as *const IMAGE_IMPORT_BY_NAME;
+                let func_name = std::ffi::CStr::from_ptr((*import_by_name).Name.as_ptr() as *const i8);
+                
+                if func_name.to_bytes() == b"GetCommandLineA" {
+                    let mut old_protect = PAGE_PROTECTION_FLAGS(0);
+                    let _ = VirtualProtect(thunk as *const c_void, mem::size_of::<IMAGE_THUNK_DATA32>(), PAGE_READWRITE, &mut old_protect);
+                    (*thunk).u1.Function = hooked_get_command_line_a as usize as u32;
+                    let _ = VirtualProtect(thunk as *const c_void, mem::size_of::<IMAGE_THUNK_DATA32>(), old_protect, &mut old_protect);
+                } else if func_name.to_bytes() == b"GetCommandLineW" {
+                    let mut old_protect = PAGE_PROTECTION_FLAGS(0);
+                    let _ = VirtualProtect(thunk as *const c_void, mem::size_of::<IMAGE_THUNK_DATA32>(), PAGE_READWRITE, &mut old_protect);
+                    (*thunk).u1.Function = hooked_get_command_line_w as usize as u32;
+                    let _ = VirtualProtect(thunk as *const c_void, mem::size_of::<IMAGE_THUNK_DATA32>(), old_protect, &mut old_protect);
+                }
+            }
+            
+            thunk = thunk.add(1);
+            name_thunk = name_thunk.add(1);
+        }
+
+        import_desc = import_desc.add(1);
+    }
+}
+
+unsafe fn hook_command_line_in_iat64(image_base: *mut c_void, nt_header: *mut IMAGE_NT_HEADERS64) {
+    let import_dir = (*nt_header).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT.0 as usize];
+    if import_dir.Size == 0 {
+        return;
+    }
+
+    let mut import_desc = (image_base as usize + import_dir.VirtualAddress as usize) as *mut IMAGE_IMPORT_DESCRIPTOR;
+
+    while (*import_desc).Name != 0 {
+        let mut thunk = (image_base as usize + (*import_desc).FirstThunk as usize) as *mut IMAGE_THUNK_DATA64;
+        let mut name_thunk = if (*import_desc).Anonymous.OriginalFirstThunk != 0 {
+            (image_base as usize + (*import_desc).Anonymous.OriginalFirstThunk as usize) as *mut IMAGE_THUNK_DATA64
+        } else {
+            thunk
+        };
+
+        while (*name_thunk).u1.Function != 0 {
+            if (*name_thunk).u1.Ordinal & IMAGE_ORDINAL_FLAG64 == 0 {
+                let import_by_name = (image_base as usize + (*name_thunk).u1.AddressOfData as usize) as *const IMAGE_IMPORT_BY_NAME;
+                let func_name = std::ffi::CStr::from_ptr((*import_by_name).Name.as_ptr() as *const i8);
+                
+                if func_name.to_bytes() == b"GetCommandLineA" {
+                    let mut old_protect = PAGE_PROTECTION_FLAGS(0);
+                    let _ = VirtualProtect(thunk as *const c_void, mem::size_of::<IMAGE_THUNK_DATA64>(), PAGE_READWRITE, &mut old_protect);
+                    (*thunk).u1.Function = hooked_get_command_line_a as usize as u64;
+                    let _ = VirtualProtect(thunk as *const c_void, mem::size_of::<IMAGE_THUNK_DATA64>(), old_protect, &mut old_protect);
+                } else if func_name.to_bytes() == b"GetCommandLineW" {
+                    let mut old_protect = PAGE_PROTECTION_FLAGS(0);
+                    let _ = VirtualProtect(thunk as *const c_void, mem::size_of::<IMAGE_THUNK_DATA64>(), PAGE_READWRITE, &mut old_protect);
+                    (*thunk).u1.Function = hooked_get_command_line_w as usize as u64;
+                    let _ = VirtualProtect(thunk as *const c_void, mem::size_of::<IMAGE_THUNK_DATA64>(), old_protect, &mut old_protect);
+                }
+            }
+            
+            thunk = thunk.add(1);
+            name_thunk = name_thunk.add(1);
+        }
+
+        import_desc = import_desc.add(1);
+    }
+}
+
+unsafe fn restore_command_line(_backup: Option<CommandLineBackup>) {
+    CUSTOM_CMDLINE_A.clear();
+    CUSTOM_CMDLINE_W.clear();
+}
+
 /// Execute PE binary in memory (Local PE Injection)
 pub fn inject_and_execute(pe_data: &[u8], args: &[String], verbose: bool) -> Result<()> {
     if verbose {
@@ -82,7 +226,7 @@ pub fn inject_and_execute(pe_data: &[u8], args: &[String], verbose: bool) -> Res
     }
 }
 
-fn execute_pe32(pe_data: &[u8], _args: &[String], verbose: bool) -> Result<()> {
+fn execute_pe32(pe_data: &[u8], args: &[String], verbose: bool) -> Result<()> {
     let (_dos_header, nt_header) = get_headers32(pe_data)?;
     let is_dll = unsafe { (*nt_header).FileHeader.Characteristics.0 & IMAGE_FILE_DLL.0 != 0 };
 
@@ -124,6 +268,8 @@ fn execute_pe32(pe_data: &[u8], _args: &[String], verbose: bool) -> Result<()> {
     }
     fix_memory_protections32(image_base, nt_header)?;
 
+    let backup = unsafe { set_command_line_hook(image_base, Some(nt_header), None, args) };
+
     if verbose {
         println!("Executing TLS callbacks...");
     }
@@ -132,12 +278,14 @@ fn execute_pe32(pe_data: &[u8], _args: &[String], verbose: bool) -> Result<()> {
     if verbose {
         println!("Executing entry point...");
     }
-    execute_entrypoint32(image_base, nt_header, is_dll, verbose)?;
+    let result = execute_entrypoint32(image_base, nt_header, is_dll, verbose);
 
-    Ok(())
+    unsafe { restore_command_line(backup) };
+
+    result
 }
 
-fn execute_pe64(pe_data: &[u8], _args: &[String], verbose: bool) -> Result<()> {
+fn execute_pe64(pe_data: &[u8], args: &[String], verbose: bool) -> Result<()> {
     let (_dos_header, nt_header) = get_headers64(pe_data)?;
     let is_dll = unsafe { (*nt_header).FileHeader.Characteristics.0 & IMAGE_FILE_DLL.0 != 0 };
 
@@ -175,6 +323,8 @@ fn execute_pe64(pe_data: &[u8], _args: &[String], verbose: bool) -> Result<()> {
     }
     fix_memory_protections64(image_base, nt_header, verbose)?;
 
+    let backup = unsafe { set_command_line_hook(image_base, None, Some(nt_header), args) };
+
     if verbose {
         println!("Executing TLS callbacks...");
     }
@@ -183,13 +333,15 @@ fn execute_pe64(pe_data: &[u8], _args: &[String], verbose: bool) -> Result<()> {
     if verbose {
         println!("Executing entry point...");
     }
-    execute_entrypoint64(image_base, nt_header, is_dll, verbose)?;
+    let result = execute_entrypoint64(image_base, nt_header, is_dll, verbose);
+
+    unsafe { restore_command_line(backup) };
 
     if verbose {
         println!("Execution completed");
     }
 
-    Ok(())
+    result
 }
 
 fn is_pe64(pe_data: &[u8]) -> Result<bool> {
