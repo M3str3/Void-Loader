@@ -208,6 +208,7 @@ fn split_and_write_parts(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_part(
     part_number: u32,
     total_parts: u32,

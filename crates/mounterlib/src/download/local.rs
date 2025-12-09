@@ -173,7 +173,7 @@ impl Downloader for LocalLoader {
     }
 
     fn download_all(&self, sources: &[&str], _timeout: u64) -> Result<Vec<DownloadedPart>> {
-        let paths: Vec<PathBuf> = sources.iter().map(|s| PathBuf::from(s)).collect();
+        let paths: Vec<PathBuf> = sources.iter().map(PathBuf::from).collect();
         load_all(&paths)
     }
 }

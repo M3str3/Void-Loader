@@ -86,6 +86,7 @@ impl PartHeader {
     }
 
     /// Create a new v2 header (with encryption)
+    #[allow(clippy::too_many_arguments)]
     pub fn new_v2(
         part_number: u32,
         total_parts: u32,

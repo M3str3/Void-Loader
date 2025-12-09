@@ -208,7 +208,7 @@ fn download_all_parts(
         #[cfg(feature = "download-local")]
         {
             use std::path::PathBuf;
-            let paths: Vec<PathBuf> = args.urls.iter().map(|s| PathBuf::from(s)).collect();
+            let paths: Vec<PathBuf> = args.urls.iter().map(PathBuf::from).collect();
             download::local::load_all_as_map(&paths, args.verbose)
                 .context("Failed to load parts from local files")
         }

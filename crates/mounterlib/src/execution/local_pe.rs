@@ -64,8 +64,10 @@ static mut CUSTOM_CMDLINE_W: Vec<u16> = Vec::new();
 
 #[no_mangle]
 unsafe extern "system" fn hooked_get_command_line_a() -> *const i8 {
-    if !CUSTOM_CMDLINE_A.is_empty() {
-        CUSTOM_CMDLINE_A.as_ptr() as *const i8
+    let cmdline_ptr = std::ptr::addr_of!(CUSTOM_CMDLINE_A);
+    let cmdline = &*cmdline_ptr;
+    if !cmdline.is_empty() {
+        cmdline.as_ptr() as *const i8
     } else {
         ptr::null()
     }
@@ -73,8 +75,10 @@ unsafe extern "system" fn hooked_get_command_line_a() -> *const i8 {
 
 #[no_mangle]
 unsafe extern "system" fn hooked_get_command_line_w() -> *const u16 {
-    if !CUSTOM_CMDLINE_W.is_empty() {
-        CUSTOM_CMDLINE_W.as_ptr()
+    let cmdline_ptr = std::ptr::addr_of!(CUSTOM_CMDLINE_W);
+    let cmdline = &*cmdline_ptr;
+    if !cmdline.is_empty() {
+        cmdline.as_ptr()
     } else {
         ptr::null()
     }
@@ -98,12 +102,14 @@ unsafe fn set_command_line_hook(image_base: *mut c_void, nt_header32: Option<*mu
         }
     }
 
-    CUSTOM_CMDLINE_A = new_cmdline.as_bytes().to_vec();
-    CUSTOM_CMDLINE_A.push(0);
+    let cmdline_a_ptr = std::ptr::addr_of_mut!(CUSTOM_CMDLINE_A);
+    *cmdline_a_ptr = new_cmdline.as_bytes().to_vec();
+    (*cmdline_a_ptr).push(0);
 
     let mut cmdline_w: Vec<u16> = new_cmdline.encode_utf16().collect();
     cmdline_w.push(0);
-    CUSTOM_CMDLINE_W = cmdline_w;
+    let cmdline_w_ptr = std::ptr::addr_of_mut!(CUSTOM_CMDLINE_W);
+    *cmdline_w_ptr = cmdline_w;
 
     if let Some(nt_header) = nt_header32 {
         hook_command_line_in_iat32(image_base, nt_header);
@@ -199,8 +205,10 @@ unsafe fn hook_command_line_in_iat64(image_base: *mut c_void, nt_header: *mut IM
 }
 
 unsafe fn restore_command_line(_backup: Option<CommandLineBackup>) {
-    CUSTOM_CMDLINE_A.clear();
-    CUSTOM_CMDLINE_W.clear();
+    let cmdline_a_ptr = std::ptr::addr_of_mut!(CUSTOM_CMDLINE_A);
+    (*cmdline_a_ptr).clear();
+    let cmdline_w_ptr = std::ptr::addr_of_mut!(CUSTOM_CMDLINE_W);
+    (*cmdline_w_ptr).clear();
 }
 
 /// Execute PE binary in memory (Local PE Injection)

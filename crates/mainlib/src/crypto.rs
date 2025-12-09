@@ -91,16 +91,13 @@ fn chacha20_block(key: &[u8; 32], nonce: &[u8; 12], counter: u32) -> [u8; 64] {
 /// Encrypt data with ChaCha20
 pub fn chacha20_encrypt(data: &[u8], key: &[u8; 32], nonce: &[u8; 12]) -> Vec<u8> {
     let mut output = Vec::with_capacity(data.len());
-    let mut counter = 0u32;
 
-    for chunk in data.chunks(64) {
-        let keystream = chacha20_block(key, nonce, counter);
+    for (counter, chunk) in data.chunks(64).enumerate() {
+        let keystream = chacha20_block(key, nonce, counter as u32);
 
         for (i, &byte) in chunk.iter().enumerate() {
             output.push(byte ^ keystream[i]);
         }
-
-        counter += 1;
     }
 
     output
